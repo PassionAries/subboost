@@ -1,5 +1,6 @@
 import type { CustomRule, CustomRuleSet } from "@subboost/core/types/config";
 import { isCustomRuleType } from "./custom-rule-utils";
+import { isLogicRuleType, normalizeCustomRuleValue } from "./custom-rule-value";
 import { allocateRuleSetId, parseManualRuleSetUrl } from "./rule-model";
 
 type ImportRule = Omit<CustomRule, "type"> & { type: CustomRule["type"] | "RULE-SET" };
@@ -49,6 +50,8 @@ function splitRuleLine(rawLine: string): SplitLineResult {
   const parts: string[] = [];
   let current = "";
   let quoted = false;
+  // Logic rules nest commas inside parens: AND,((DOMAIN,a.com),(NETWORK,UDP)),DIRECT
+  let depth = 0;
 
   for (let index = 0; index < rawLine.length; index += 1) {
     const char = rawLine[index];
@@ -61,7 +64,9 @@ function splitRuleLine(rawLine: string): SplitLineResult {
       quoted = !quoted;
       continue;
     }
-    if (char === "," && !quoted) {
+    if (!quoted && char === "(") depth += 1;
+    if (!quoted && char === ")") depth = Math.max(0, depth - 1);
+    if (char === "," && !quoted && depth === 0) {
       parts.push(current.trim());
       current = "";
       continue;
@@ -256,13 +261,16 @@ export function parseCustomRuleBatchImport(
       return;
     }
 
-    if (!draft.value.trim()) {
+    const draftValue = draft.type === "RULE-SET"
+      ? { ok: Boolean(draft.value.trim()), value: draft.value.trim(), error: "规则值不能为空" }
+      : normalizeCustomRuleValue(draft.type, draft.value);
+    if (!draftValue.ok) {
       errorCount += 1;
       items.push({
         lineNumber,
         raw: rawLine,
         status: "error",
-        message: "规则值不能为空",
+        message: draftValue.error,
       });
       return;
     }
@@ -307,9 +315,9 @@ export function parseCustomRuleBatchImport(
     const rule: ImportRule = {
       id: "",
       type: draft.type,
-      value: draft.value.trim(),
+      value: draftValue.value,
       target,
-      noResolve: Boolean(draft.noResolve),
+      noResolve: Boolean(draft.noResolve) && !isLogicRuleType(draft.type),
     };
     const key = getRuleKey(rule);
     if (existingKeys.has(key) || batchKeys.has(key)) {

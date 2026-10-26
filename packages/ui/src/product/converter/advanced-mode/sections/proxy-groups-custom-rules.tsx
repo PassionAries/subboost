@@ -20,6 +20,7 @@ import {
   createCustomRuleId,
   CUSTOM_RULE_TYPES,
 } from "@subboost/core/rules/custom-rule-utils";
+import { isLogicRuleType, normalizeCustomRuleValue } from "@subboost/core/rules/custom-rule-value";
 import { useConfigStore } from "@subboost/ui/store/config-store";
 import { allocateRuleSetId, parseManualRuleSetUrl } from "@subboost/core/rules/rule-model";
 import { toast } from "@subboost/ui/components/ui/toaster";
@@ -53,6 +54,9 @@ const CUSTOM_RULE_TYPE_LABELS: Record<CustomRule["type"], string> = {
   "PROCESS-NAME": "进程名 (PROCESS-NAME)",
   "DST-PORT": "目标端口 (DST-PORT)",
   "SRC-PORT": "源端口 (SRC-PORT)",
+  AND: "逻辑与 (AND)",
+  OR: "逻辑或 (OR)",
+  NOT: "逻辑非 (NOT)",
 };
 
 const CUSTOM_RULE_TYPE_SHORT_LABELS: Record<CustomRule["type"], string> = {
@@ -66,6 +70,9 @@ const CUSTOM_RULE_TYPE_SHORT_LABELS: Record<CustomRule["type"], string> = {
   "PROCESS-NAME": "进程名",
   "DST-PORT": "目标端口",
   "SRC-PORT": "源端口",
+  AND: "AND (与)",
+  OR: "OR (或)",
+  NOT: "NOT (非)",
 };
 
 const CUSTOM_RULE_TYPE_OPTIONS = CUSTOM_RULE_TYPES.map((value) => ({
@@ -84,6 +91,13 @@ function getProductRuleKind(type: CustomRule["type"]): ProductRuleKind {
 
 function isIpCidrRuleType(type: CustomRule["type"]): boolean {
   return type === "IP-CIDR" || type === "IP-CIDR6";
+}
+
+function getRuleValuePlaceholder(type: CustomRule["type"] | "RULE-SET"): string {
+  if (type === "RULE-SET") return "规则集链接 (https://…/geosite/udemy.mrs)";
+  if (type === "NOT") return "((DOMAIN,example.com))";
+  if (isLogicRuleType(type)) return "((PROCESS-NAME,tailscaled),(NETWORK,UDP))";
+  return "值 (如: google.com)";
 }
 
 function getTargetOptions(enabledGroupNames: string[], selected?: string) {
@@ -210,12 +224,17 @@ export function ProxyGroupsCustomRules() {
       return;
     }
 
+    const normalizedValue = normalizeCustomRuleValue(addedRuleType, value);
+    if (!normalizedValue.ok) {
+      toast({ title: normalizedValue.error, variant: "warning" });
+      return;
+    }
     addCustomRule({
       id: createCustomRuleId(),
       type: addedRuleType,
-      value,
+      value: normalizedValue.value,
       target: toStableRuleTarget(newRuleTarget, moduleNames, customProxyGroups),
-      noResolve: newRuleNoResolve,
+      noResolve: newRuleNoResolve && !isLogicRuleType(addedRuleType),
     });
     interactions.ruleAdded?.({
       source: "manual",
@@ -252,12 +271,17 @@ export function ProxyGroupsCustomRules() {
     if (!editingRuleId || !editingRuleDraft) return;
     const value = editingRuleDraft.value.trim();
     if (!value || !editingRuleDraft.target) return;
+    const normalizedValue = normalizeCustomRuleValue(editingRuleDraft.type, value);
+    if (!normalizedValue.ok) {
+      toast({ title: normalizedValue.error, variant: "warning" });
+      return;
+    }
 
     updateCustomRule(editingRuleId, {
       type: editingRuleDraft.type,
-      value,
+      value: normalizedValue.value,
       target: toStableRuleTarget(resolveTargetName(editingRuleDraft.target), moduleNames, customProxyGroups),
-      noResolve: Boolean(editingRuleDraft.noResolve),
+      noResolve: Boolean(editingRuleDraft.noResolve) && !isLogicRuleType(editingRuleDraft.type),
     });
     cancelEditingRule();
   };
@@ -335,7 +359,7 @@ export function ProxyGroupsCustomRules() {
             <Input
               value={newRuleValue}
               onChange={(e) => setNewRuleValue(e.target.value)}
-              placeholder={newRuleType === "RULE-SET" ? "规则集链接 (https://…/geosite/udemy.mrs)" : "值 (如: google.com)"}
+              placeholder={getRuleValuePlaceholder(newRuleType)}
               className="h-7 min-w-0 flex-[1_1_4.5rem] text-xs"
             />
           </div>
@@ -355,7 +379,8 @@ export function ProxyGroupsCustomRules() {
             <div className="flex h-7 shrink-0 items-center gap-1 rounded-lg border border-ink/10 bg-ink/5 px-2">
               <Switch
                 aria-label="新规则不解析域名"
-                checked={newRuleNoResolve}
+                checked={newRuleNoResolve && !isLogicRuleType(newRuleType)}
+                disabled={isLogicRuleType(newRuleType)}
                 onCheckedChange={setNewRuleNoResolve}
               />
               <span className="proxy-group-rule-no-resolve-label text-[10px] text-fg-50">no-resolve</span>
@@ -438,6 +463,7 @@ export function ProxyGroupsCustomRules() {
                             prev ? { ...prev, value: e.target.value } : prev,
                           )
                         }
+                        placeholder={getRuleValuePlaceholder(editingRuleDraft.type)}
                         className="h-7 min-w-0 flex-[1_1_4.5rem] text-xs"
                       />
                     </div>
@@ -470,7 +496,8 @@ export function ProxyGroupsCustomRules() {
                       <div className="flex h-7 shrink-0 items-center gap-1 rounded-lg border border-ink/10 bg-ink/5 px-2">
                         <Switch
                           aria-label="编辑规则时不解析域名"
-                          checked={Boolean(editingRuleDraft.noResolve)}
+                          checked={Boolean(editingRuleDraft.noResolve) && !isLogicRuleType(editingRuleDraft.type)}
+                          disabled={isLogicRuleType(editingRuleDraft.type)}
                           onCheckedChange={(noResolve) =>
                             setEditingRuleDraft((prev) =>
                               prev ? { ...prev, noResolve } : prev,

@@ -182,6 +182,7 @@ export function ProxyGroupsCustomRulesBatchDialog({
                 "DOMAIN-SUFFIX,example.com,🚀 节点选择",
                 "IP-CIDR,1.1.1.0/24,DIRECT,no-resolve",
                 "GEOSITE,google",
+                "AND,((PROCESS-NAME,tailscaled),(NETWORK,UDP)),DIRECT",
                 "github.com",
               ].join("\n")}
               className="min-h-[180px] resize-y font-mono text-xs"
