@@ -179,4 +179,82 @@ describe("Mihomo stable custom rule round trips", () => {
     expect(parse(`DOMAIN-REGEX,${value},Missing`).items[0]?.message).toBe("未知目标：Missing");
     expect(performance.now() - started).toBeLessThan(2000);
   });
+
+  it.each([
+    "^local(?# [note)$",
+    "^local(?# (note)$",
+    String.raw`^local(?# \)[(,]$`,
+    "^local(?# [, {1,3} (note)$",
+    "(?x)^local# [ ( {",
+    "(?X)^local# [ ( {",
+    "(?im-sx+x)^local# [ ( {",
+    "(?x)^local(?-x:#literal[(,])# [ ( {",
+    "(?x:^local)#literal[(,]$",
+    "(?<app>local(?x))#literal[(,]$",
+    "(?x)(?-x)^local#[(,]$",
+    String.raw`(?x)^local\#[(,]$`,
+    "(?x)^local[#,()]$",
+    "^local(?# (?x)[,]#literal[(,]$",
+  ])("preserves regexp2 comment and option boundaries through saved YAML: %s", (value) => {
+    for (const type of ["DOMAIN-REGEX", "PROCESS-NAME-REGEX", "PROCESS-PATH-REGEX"]) {
+      for (const suffix of ["", ",", ",REJECT"]) {
+        const target = suffix === ",REJECT" ? "REJECT" : "DIRECT";
+        const imported = parse(`${type},${value}${suffix}`);
+        expect(imported.canImport).toBe(true);
+        expect(imported.rules[0]).toMatchObject({ type, value, target, noResolve: false });
+        const template = validateSubBoostTemplateConfig(validConfig({ customRules: imported.rules }));
+        expect(template.ok).toBe(true);
+        if (!template.ok) throw new Error(template.error);
+        const options = buildGenerateOptionsFromConfig(JSON.parse(JSON.stringify({
+          template: "full", enabledGroups: [], enabledRules: [], customRules: template.config.customRules,
+        })), { nodes: [] });
+        expect(options.userConfig?.customRules?.[0]).toMatchObject({ type, value, target });
+        const yaml = load(configToYaml(generateClashConfig(options))) as { rules: string[] };
+        expect(yaml.rules.filter((rule) => rule.startsWith(`${type},`))).toEqual([`${type},${value},${target}`]);
+      }
+      const unknown = parse(`${type},${value},Missing`);
+      expect(unknown.canImport).toBe(false);
+      expect(unknown.items[0]?.message).toBe("未知目标：Missing");
+    }
+  });
+
+  it("uses quoted CSV to disambiguate commas in x-mode line comments", () => {
+    const value = "(?x)^local# [ ( ,REJECT";
+    for (const suffix of ["", ",", ",REJECT"]) {
+      expect(parse(`\"DOMAIN-REGEX\",\"${value}\"${suffix}`).rules[0])
+        .toMatchObject({ value, target: suffix === ",REJECT" ? "REJECT" : "DIRECT" });
+    }
+    expect(parse(`DOMAIN-REGEX,${value}`).rules[0])
+      .toMatchObject({ value: "(?x)^local# [ (", target: "REJECT" });
+    expect(parse("DOMAIN-REGEX,(?x)^local# [,] (,Missing").items[0]?.message).toBe("未知目标：Missing");
+  });
+
+  it("rejects an unterminated regexp2 block comment without inferring a target", () => {
+    const result = parse("DOMAIN-REGEX,^local(?# [note,REJECT");
+    expect(result.canImport).toBe(false);
+    expect(result.rules).toEqual([]);
+    expect(result.items[0]?.message).toContain("注释未闭合");
+  });
+
+  it.each(["Group (?#", "Group # [", "Group (?x"])("keeps policy syntax separate from regex syntax: %s", (target) => {
+    for (const value of ["^local", "(?x)^local# ["]) {
+      const result = parseCustomRuleBatchImport({
+        text: `DOMAIN-REGEX,${value},${target}`, defaultType: "DOMAIN", defaultTarget: "DIRECT",
+        defaultNoResolve: false, targetOptions: ["DIRECT", target], existingRules: [],
+      });
+      expect(result.canImport).toBe(true);
+      expect(result.rules[0]).toMatchObject({ value, target });
+      expect(parse(`DOMAIN-REGEX,${value},${target}`).items[0]?.message).toBe(`未知目标：${target}`);
+    }
+  });
+
+  it("scans long regexp2 comments and option sequences in bounded time", () => {
+    const started = performance.now();
+    const comments = `^local${"(?# [(\\)".repeat(20_000)}$`;
+    const options = `(?${"x+".repeat(50_000)}x)^local# [ ( {`;
+    for (const value of [comments, options]) {
+      expect(parse(`DOMAIN-REGEX,${value},Missing`).items[0]?.message).toBe("未知目标：Missing");
+    }
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
 });

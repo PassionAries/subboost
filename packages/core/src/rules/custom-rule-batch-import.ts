@@ -79,17 +79,22 @@ function splitRuleLine(rawLine: string): SplitLineResult {
   return { ok: true, parts };
 }
 
-/** Unquoted regex lines use the last comma outside groups/classes/quantifiers
- * as the policy separator. Literal ambiguous commas use explicit CSV fields. */
+/** Unquoted regex lines protect regexp2 structure when inferring an omitted
+ * policy. Literal ambiguous commas use explicit CSV fields. */
 function splitCommaPayloadLine(rawLine: string, type: string): SplitLineResult {
   const firstComma = rawLine.indexOf(",");
   const payload = rawLine.slice(firstComma + 1).trim();
   const logic = isLogicRuleType(type);
+  const lastComma = payload.lastIndexOf(",");
   let depth = 0;
   let classStart = -1;
   let posixClass = false;
+  let extended = false;
+  const extendedScopes: boolean[] = [];
   let separator = -1;
-  for (let index = 0; index < payload.length; index += 1) {
+  // The final policy name may itself contain regex metacharacters. Only scan
+  // as far as the last possible separator, never through that policy field.
+  for (let index = 0; index <= lastComma; index += 1) {
     const char = payload[index];
     if (!logic) {
       if (char === "\\") { index += 1; continue; }
@@ -104,7 +109,47 @@ function splitCommaPayloadLine(rawLine: string, type: string): SplitLineResult {
         if (char === "]" && index > classStart + 1 && !(index === classStart + 2 && payload[classStart + 1] === "^")) classStart = -1;
         continue;
       }
+      // regexp2 syntax/parser.go scanBlank: block comments end at the first
+      // ')' even after a backslash; none of their contents change regex state.
+      if (payload.startsWith("(?#", index)) {
+        const end = payload.indexOf(")", index + 3);
+        if (end < 0) return { ok: false, error: "正则注释未闭合" };
+        index = end;
+        continue;
+      }
+      if (extended && char === "#") {
+        // Import rows cannot contain a newline. The remaining regex is a
+        // comment, but Mihomo still takes the last CSV column as the policy.
+        separator = lastComma;
+        break;
+      }
       if (char === "[") { classStart = index; continue; }
+      if (char === "(" && payload[index + 1] === "?") {
+        // Only x changes delimiter scanning. Other inline options are consumed
+        // using regexp2's case-insensitive option alphabet and +/- semantics.
+        let end = index + 2;
+        let optionX = extended;
+        let enabled = true;
+        for (; end < payload.length; end += 1) {
+          const option = payload[end].toLowerCase();
+          if (option === "+" || option === "-") enabled = option === "+";
+          else if ("imnsxdu".includes(option)) {
+            if (option === "x") optionX = enabled;
+          } else break;
+        }
+        if (payload[end] === ")") {
+          extended = optionX;
+          index = end;
+          continue;
+        }
+        if (payload[end] === ":") {
+          extendedScopes.push(extended);
+          extended = optionX;
+          depth += 1;
+          index = end;
+          continue;
+        }
+      }
       if (char === "{") {
         let end = index + 1;
         while (end < payload.length && payload[end] >= "0" && payload[end] <= "9") end += 1;
@@ -117,8 +162,14 @@ function splitCommaPayloadLine(rawLine: string, type: string): SplitLineResult {
         }
       }
     }
-    if (char === "(") depth += 1;
-    if (char === ")") depth = Math.max(0, depth - 1);
+    if (char === "(") {
+      depth += 1;
+      if (!logic) extendedScopes.push(extended);
+    }
+    if (char === ")") {
+      depth = Math.max(0, depth - 1);
+      if (!logic) extended = extendedScopes.pop() ?? extended;
+    }
     if (char === "," && depth === 0) separator = index;
   }
   return { ok: true, parts: separator < 0
