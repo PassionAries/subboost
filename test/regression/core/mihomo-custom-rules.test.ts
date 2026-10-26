@@ -147,4 +147,36 @@ describe("Mihomo stable custom rule round trips", () => {
     expect(parse(`DOMAIN-REGEX,^local${"{".repeat(100_000)},Missing`).items[0]?.message).toBe("未知目标：Missing");
     expect(performance.now() - started).toBeLessThan(2000);
   });
+
+  it.each([
+    "^local[[:alpha:],]$",
+    "^local[^[:alpha:],]$",
+    "^local[[:^alpha:],]$",
+    "^local[[:alpha:][:digit:],]$",
+  ])("preserves POSIX character classes and their commas: %s", (value) => {
+    for (const suffix of ["", ",", ",REJECT"]) {
+      const result = parse(`DOMAIN-REGEX,${value}${suffix}`);
+      expect(result.canImport).toBe(true);
+      expect(result.rules[0]).toMatchObject({ type: "DOMAIN-REGEX", value, target: suffix === ",REJECT" ? "REJECT" : "DIRECT" });
+    }
+    const unknown = parse(`DOMAIN-REGEX,${value},Missing`);
+    expect(unknown.canImport).toBe(false);
+    expect(unknown.items[0]?.message).toBe("未知目标：Missing");
+  });
+
+  it.each(["SRC", "sRc", "NO-RESOLVE", "No-Resolve", "no-Resolve"])("rejects case-changing parameter %s without activating it", (param) => {
+    for (const params of [param, `no-resolve,${param}`, `src,${param}`]) {
+      const result = parse(`IP-CIDR,203.0.113.0/24,DIRECT,${params}`);
+      expect(result.canImport).toBe(false);
+      expect(result.rules).toEqual([]);
+      expect(result.items[0]?.message).toContain("大小写");
+    }
+  });
+
+  it("scans long repeated POSIX classes without revisiting their contents", () => {
+    const started = performance.now();
+    const value = `^local[${"[:alpha:]".repeat(20_000)},]$`;
+    expect(parse(`DOMAIN-REGEX,${value},Missing`).items[0]?.message).toBe("未知目标：Missing");
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
 });

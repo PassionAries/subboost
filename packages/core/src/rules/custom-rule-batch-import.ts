@@ -87,12 +87,20 @@ function splitCommaPayloadLine(rawLine: string, type: string): SplitLineResult {
   const logic = isLogicRuleType(type);
   let depth = 0;
   let classStart = -1;
+  let posixClass = false;
   let separator = -1;
   for (let index = 0; index < payload.length; index += 1) {
     const char = payload[index];
     if (!logic) {
       if (char === "\\") { index += 1; continue; }
       if (classStart >= 0) {
+        // POSIX [:name:] / [:^name:] belongs to the surrounding character
+        // class; its closing bracket must not expose that class's commas.
+        if (posixClass) {
+          if (char === ":" && payload[index + 1] === "]") { posixClass = false; index += 1; }
+          continue;
+        }
+        if (char === "[" && payload[index + 1] === ":") { posixClass = true; index += 1; continue; }
         if (char === "]" && index > classStart + 1 && !(index === classStart + 2 && payload[classStart + 1] === "^")) classStart = -1;
         continue;
       }
@@ -187,7 +195,13 @@ function buildRuleFromParts(
   }
 
   const sourceType = getSourceIpRuleType(type);
-  const params = parts.slice(3).map((param) => param.toLowerCase());
+  const params = parts.slice(3);
+  // Mihomo ParseParams compares these strings case-sensitively. Reject typos
+  // rather than silently changing source matching or DNS resolution behavior.
+  const caseVariant = params.find((param) => param !== "src" && param !== "no-resolve" && ["src", "no-resolve"].includes(param.toLowerCase()));
+  if (caseVariant !== undefined) {
+    return `参数区分大小写：${caseVariant}（请使用 ${caseVariant.toLowerCase()}）`;
+  }
   if (parts.length > 4 && (!sourceType || !params.includes("src") || params.some((param) => param !== "no-resolve" && param !== "src"))) {
     return "规则列数过多";
   }
