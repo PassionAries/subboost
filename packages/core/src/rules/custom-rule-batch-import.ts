@@ -128,7 +128,7 @@ function splitCommaPayloadLine(rawLine: string, type: string): SplitLineResult {
         // Only x changes delimiter scanning. Other inline options are consumed
         // using regexp2's case-insensitive option alphabet and +/- semantics.
         let end = index + 2;
-        let optionX = extended;
+        let optionX: boolean = extended;
         let enabled = true;
         for (; end < payload.length; end += 1) {
           const option = payload[end].toLowerCase();
