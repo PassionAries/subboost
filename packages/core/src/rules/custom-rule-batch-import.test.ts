@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseCustomRuleBatchImport, type ParseCustomRuleBatchImportOptions } from "./custom-rule-batch-import";
 import { CUSTOM_RULE_TYPES } from "./custom-rule-utils";
 import { isLogicRuleType } from "./custom-rule-value";
+import { supportsNoResolve } from "./custom-rule-types";
 import { allocateRuleSetId } from "./rule-model";
 
 const url = "https://local.subboost.test/geosite/udemy.mrs";
@@ -14,7 +15,7 @@ describe("batch import current selections", () => {
   it.each(CUSTOM_RULE_TYPES.filter((type) => !isLogicRuleType(type)))("inherits the selected %s type, target and no-resolve for plain values", (defaultType) => {
     const result = parse("value", { defaultType });
     expect(result.canImport).toBe(true);
-    expect(result.rules).toEqual([{ id: "", type: defaultType, value: "value", target: "Proxy", noResolve: true }]);
+    expect(result.rules).toEqual([{ id: "", type: defaultType, value: "value", target: "Proxy", noResolve: supportsNoResolve(defaultType) }]);
   });
   it("creates named providers for plain URLs and explicit RULE-SET rows, including empty target columns", () => {
     const result = parse(`${url}\nRULE-SET,${url}?v=2,\nRULE-SET,${url}?v=3,Other,no-resolve`, { reservedRuleSetIds: ["udemy"] });

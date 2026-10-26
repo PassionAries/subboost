@@ -25,15 +25,13 @@ describe("logic rule payload", () => {
   it.each([
     ["AND", "(PROCESS-NAME,tailscaled),(NETWORK,UDP)", "需形如"],
     ["AND", "((PROCESS-NAME,tailscaled),(NETWORK,UDP)", "需形如"],
-    ["AND", "((PROCESS-NAME,tailscaled))", "至少需要 2 个"],
     ["OR", "((DOMAIN,a.com),)", "格式错误"],
     ["NOT", "((DOMAIN,a.com),(DOMAIN,b.com))", "只能包含 1 个"],
     ["AND", "((DOMAIN,a.com),(NETWORK))", "缺少值"],
-    ["AND", "((DOMAIN,a.com),(network,udp))", "类型无效"],
+    ["AND", "((DOMAIN,a.com),(UNKNOWN,udp))", "类型无效"],
     ["AND", "((DOMAIN,a.com),(MATCH,x))", "不支持"],
     ["AND", "((DOMAIN,a.com),(NETWORK,))", "不能为空"],
     ["AND", "((DOMAIN,a.com),DOMAIN,b.com)", "括号包裹"],
-    ["AND", "((DOMAIN,a.com),(OR,((DOMAIN,b.com))))", "至少需要 2 个"],
   ] as const)("rejects %s %s", (type, payload, message) => {
     const result = normalizeLogicRulePayload(type, payload);
     expect(result.ok).toBe(false);

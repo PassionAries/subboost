@@ -1,3 +1,5 @@
+import { hasCommaPayload, isCustomRuleType, supportsNoResolve } from "./custom-rule-types";
+
 export const LOGIC_RULE_TYPES = ["AND", "OR", "NOT"] as const;
 
 export type LogicRuleType = (typeof LOGIC_RULE_TYPES)[number];
@@ -7,7 +9,6 @@ export type LogicRulePayloadResult =
   | { ok: false; error: string };
 
 const logicRuleTypeSet = new Set<string>(LOGIC_RULE_TYPES);
-const SUB_RULE_TYPE_RE = /^[A-Z][A-Z0-9-]*$/;
 // mihomo rejects these inside logic rules (rules/logic/logic.go payloadToRule).
 const UNSUPPORTED_SUB_RULE_TYPES = new Set(["MATCH", "SUB-RULE"]);
 
@@ -48,17 +49,23 @@ function normalizeSubRule(raw: string): LogicRulePayloadResult {
   if (inner === null) return { ok: false, error: `子条件需用括号包裹：${raw}` };
   const commaIndex = inner.indexOf(",");
   if (commaIndex < 0) return { ok: false, error: `子条件缺少值：${raw}` };
-  const type = inner.slice(0, commaIndex).trim();
+  const type = inner.slice(0, commaIndex).trim().toUpperCase();
   const rest = inner.slice(commaIndex + 1).trim();
-  if (!SUB_RULE_TYPE_RE.test(type)) return { ok: false, error: `子条件类型无效：${type || raw}` };
   if (UNSUPPORTED_SUB_RULE_TYPES.has(type)) return { ok: false, error: `逻辑规则不支持子条件类型：${type}` };
+  if (!isCustomRuleType(type) && type !== "RULE-SET") return { ok: false, error: `子条件类型无效：${type}` };
   if (isLogicRuleType(type)) {
     const nested = normalizeLogicRulePayload(type, rest);
     return nested.ok ? { ok: true, value: `(${type},${nested.value})` } : nested;
   }
-  if (rest.includes("(") || rest.includes(")")) return { ok: false, error: `子条件值不能包含括号：${raw}` };
+  if (hasCommaPayload(type)) {
+    const result = normalizeCustomRuleValue(type, rest);
+    return result.ok ? { ok: true, value: `(${type},${result.value})` } : result;
+  }
   const params = rest.split(",").map((part) => part.trim());
   if (!params[0] || params.some((part) => !part)) return { ok: false, error: `子条件值不能为空：${raw}` };
+  if (params.slice(1).some((param) => !supportsNoResolve(type) || !["no-resolve", "src"].includes(param))) {
+    return { ok: false, error: `子条件参数无效：${raw}` };
+  }
   return { ok: true, value: `(${[type, ...params].join(",")})` };
 }
 
@@ -72,7 +79,6 @@ export function normalizeLogicRulePayload(type: LogicRuleType, payload: string):
   const rawSubRules = splitTopLevel(inner);
   if (!rawSubRules || rawSubRules.some((part) => !part)) return { ok: false, error: "逻辑规则内容格式错误" };
   if (type === "NOT" && rawSubRules.length !== 1) return { ok: false, error: "NOT 规则只能包含 1 个子条件" };
-  if (type !== "NOT" && rawSubRules.length < 2) return { ok: false, error: `${type} 规则至少需要 2 个子条件` };
 
   const subRules: string[] = [];
   for (const raw of rawSubRules) {
@@ -87,5 +93,7 @@ export function normalizeLogicRulePayload(type: LogicRuleType, payload: string):
 export function normalizeCustomRuleValue(type: string, value: string): LogicRulePayloadResult {
   const trimmed = value.trim();
   if (!trimmed) return { ok: false, error: "规则值不能为空" };
+  if (/[\r\n\0]/.test(trimmed)) return { ok: false, error: "规则值不能包含换行或空字符" };
+  if (!hasCommaPayload(type) && trimmed.includes(",")) return { ok: false, error: "该类型的规则值不能包含逗号" };
   return isLogicRuleType(type) ? normalizeLogicRulePayload(type, trimmed) : { ok: true, value: trimmed };
 }

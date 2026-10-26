@@ -18,6 +18,7 @@ import { buildProxyProvidersFromConfig } from "@subboost/core/subscription/proxy
 import { resolveNodeNameFilter } from "@subboost/core/subscription/node-name-filter";
 import { ensureCustomRuleId, isCustomRuleType } from "@subboost/core/rules/custom-rule-utils";
 import { normalizeCustomRuleValue } from "@subboost/core/rules/custom-rule-value";
+import { supportsNoResolve } from "@subboost/core/rules/custom-rule-types";
 import { DEFAULT_SUBBOOST_CONFIG } from "@subboost/core/config/defaults";
 import { normalizeRuleModelFromConfig } from "@subboost/core/rules/rule-model";
 import { normalizeProxyGroupAdvancedConfig } from "@subboost/core/proxy-group-advanced";
@@ -86,7 +87,7 @@ function normalizeCustomRules(value: unknown): CustomRule[] | undefined {
       type,
       value: ruleValue.value,
       target,
-      ...(noResolve !== undefined ? { noResolve } : {}),
+      ...(noResolve !== undefined ? { noResolve: noResolve && supportsNoResolve(type) } : {}),
     }, index));
   }
 

@@ -2,6 +2,7 @@ import { PROXY_GROUP_MODULES } from "@subboost/core/generator/proxy-groups";
 import { normalizePersistedRuleOrder } from "@subboost/core/generator/rules";
 import { ensureCustomRuleId, isCustomRuleType } from "@subboost/core/rules/custom-rule-utils";
 import { normalizeCustomRuleValue } from "@subboost/core/rules/custom-rule-value";
+import { supportsNoResolve } from "@subboost/core/rules/custom-rule-types";
 import { resolveProxyGroupAdvancedModeEnabled } from "@subboost/core/proxy-group-advanced-mode";
 import { normalizeProxyGroupAdvancedConfig } from "@subboost/core/proxy-group-advanced";
 import { normalizeProxyGroupTargetRef } from "@subboost/core/proxy-group-targets";
@@ -316,7 +317,7 @@ function parseCustomRules(value: unknown): { ok: true; value: CustomRule[] } | {
           type: item.type,
           value: ruleValue.value,
           target: target.value,
-          ...(noResolve.value !== undefined ? { noResolve: noResolve.value } : {}),
+          ...(noResolve.value !== undefined ? { noResolve: noResolve.value && supportsNoResolve(item.type) } : {}),
         },
         index
       )

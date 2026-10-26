@@ -1,6 +1,7 @@
 import type { CustomRule, CustomRuleSet } from "@subboost/core/types/config";
 import { isCustomRuleType } from "./custom-rule-utils";
-import { isLogicRuleType, normalizeCustomRuleValue } from "./custom-rule-value";
+import { normalizeCustomRuleValue } from "./custom-rule-value";
+import { hasCommaPayload, supportsNoResolve } from "./custom-rule-types";
 import { allocateRuleSetId, parseManualRuleSetUrl } from "./rule-model";
 
 type ImportRule = Omit<CustomRule, "type"> & { type: CustomRule["type"] | "RULE-SET" };
@@ -50,12 +51,10 @@ function splitRuleLine(rawLine: string): SplitLineResult {
   const parts: string[] = [];
   let current = "";
   let quoted = false;
-  // Logic rules nest commas inside parens: AND,((DOMAIN,a.com),(NETWORK,UDP)),DIRECT
-  let depth = 0;
 
   for (let index = 0; index < rawLine.length; index += 1) {
     const char = rawLine[index];
-    if (char === "\"") {
+    if (char === "\"" && (quoted || !current.trim())) {
       if (quoted && rawLine[index + 1] === "\"") {
         current += "\"";
         index += 1;
@@ -64,9 +63,7 @@ function splitRuleLine(rawLine: string): SplitLineResult {
       quoted = !quoted;
       continue;
     }
-    if (!quoted && char === "(") depth += 1;
-    if (!quoted && char === ")") depth = Math.max(0, depth - 1);
-    if (char === "," && !quoted && depth === 0) {
+    if (char === "," && !quoted) {
       parts.push(current.trim());
       current = "";
       continue;
@@ -115,7 +112,7 @@ function getRuleKey(rule: Pick<ImportRule, "type" | "value" | "target" | "noReso
     rule.type,
     rule.value.trim(),
     getTargetKey(rule.target),
-    Boolean(rule.noResolve) ? "1" : "0",
+    Boolean(rule.noResolve) && supportsNoResolve(rule.type) ? "1" : "0",
   ].join("\u0000");
 }
 
@@ -137,8 +134,21 @@ function buildRuleFromParts(
     };
   }
 
-  if (!isCustomRuleType(first) && first !== "RULE-SET") {
+  const type = first.toUpperCase();
+  if (!isCustomRuleType(type) && type !== "RULE-SET") {
     return `未知规则类型：${first}`;
+  }
+
+  // Like Mihomo ParseRulePayload: regex/logic payloads consume every comma
+  // before the final target. They never take trailing parameters.
+  if (hasCommaPayload(type)) {
+    const hasTarget = parts.length >= 3;
+    return {
+      type,
+      value: parts.slice(1, hasTarget ? -1 : undefined).join(","),
+      target: (hasTarget ? parts.at(-1)?.trim() : "") || options.defaultTarget.trim(),
+      noResolve: false,
+    };
   }
 
   if (parts.length > 4) {
@@ -159,7 +169,7 @@ function buildRuleFromParts(
   }
 
   return {
-    type: first,
+    type,
     value,
     target,
     noResolve,
@@ -237,7 +247,15 @@ export function parseCustomRuleBatchImport(
       return;
     }
 
-    const split = splitRuleLine(line);
+    const commaIndex = line.indexOf(",");
+    const rawPrefix = commaIndex < 0 ? "" : line.slice(0, commaIndex).trim();
+    const prefix = (rawPrefix.startsWith('"') && rawPrefix.endsWith('"') ? rawPrefix.slice(1, -1) : rawPrefix).toUpperCase();
+    const plainCommaPayload = hasCommaPayload(options.defaultType) && !isCustomRuleType(prefix) && prefix !== "RULE-SET";
+    const split = plainCommaPayload
+      ? { ok: true as const, parts: [line] }
+      : hasCommaPayload(prefix) && !rawPrefix.startsWith('"')
+        ? { ok: true as const, parts: line.split(",").map((part) => part.trim()) }
+        : splitRuleLine(line);
     if (!split.ok) {
       errorCount += 1;
       items.push({
@@ -317,7 +335,7 @@ export function parseCustomRuleBatchImport(
       type: draft.type,
       value: draftValue.value,
       target,
-      noResolve: Boolean(draft.noResolve) && !isLogicRuleType(draft.type),
+      noResolve: Boolean(draft.noResolve) && supportsNoResolve(draft.type),
     };
     const key = getRuleKey(rule);
     if (existingKeys.has(key) || batchKeys.has(key)) {
