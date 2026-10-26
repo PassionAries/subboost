@@ -10,11 +10,11 @@ export const CUSTOM_RULE_DEFINITIONS = {
   "DOMAIN-WILDCARD": { label: "域名通配符", example: "*.subboost.test" },
   "DOMAIN-REGEX": { label: "域名正则", example: "^local\\d{1,3}\\.subboost\\.test$", commaPayload: true, hint: regexHint },
   GEOSITE: { label: "GeoSite", example: "cn", hint: geoHint },
-  "IP-CIDR": { label: "IP 段", example: "203.0.113.0/24", noResolve: true },
-  "IP-CIDR6": { label: "IPv6 段", example: "::1/128", noResolve: true, hint: "IP-CIDR 的别名；两者都支持 IPv4 和 IPv6。" },
-  "IP-SUFFIX": { label: "IP 后缀", example: "203.0.113.1/24", noResolve: true },
-  "IP-ASN": { label: "目标 ASN", example: "64512", noResolve: true, hint: geoHint },
-  GEOIP: { label: "GeoIP", example: "cn", noResolve: true, hint: geoHint },
+  "IP-CIDR": { label: "IP 段", example: "203.0.113.0/24", noResolve: true, sourceType: "SRC-IP-CIDR" },
+  "IP-CIDR6": { label: "IPv6 段", example: "::1/128", noResolve: true, sourceType: "SRC-IP-CIDR", hint: "IP-CIDR 的别名；两者都支持 IPv4 和 IPv6。" },
+  "IP-SUFFIX": { label: "IP 后缀", example: "203.0.113.1/24", noResolve: true, sourceType: "SRC-IP-SUFFIX" },
+  "IP-ASN": { label: "目标 ASN", example: "64512", noResolve: true, sourceType: "SRC-IP-ASN", hint: geoHint },
+  GEOIP: { label: "GeoIP", example: "cn", noResolve: true, sourceType: "SRC-GEOIP", hint: geoHint },
   "SRC-GEOIP": { label: "来源 GeoIP", example: "cn", hint: geoHint },
   "SRC-IP-ASN": { label: "来源 ASN", example: "64512", hint: geoHint },
   "SRC-IP-CIDR": { label: "来源 IP 段", shortLabel: "源 IP 段", example: "203.0.113.0/24" },
@@ -50,6 +50,12 @@ export function supportsNoResolve(type: string): boolean {
 }
 export function hasCommaPayload(type: string): boolean {
   return isCustomRuleType(type) && "commaPayload" in CUSTOM_RULE_DEFINITIONS[type];
+}
+export function getSourceIpRuleType(type: string): CustomRuleType | undefined {
+  const definition = isCustomRuleType(type) ? CUSTOM_RULE_DEFINITIONS[type] : undefined;
+  if (definition && "sourceType" in definition) {
+    return definition.sourceType;
+  }
 }
 export function getCustomRuleDefinition(type: CustomRuleType): {
   label: string; shortLabel?: string; example: string; hint?: string;

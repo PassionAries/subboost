@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { load } from "js-yaml";
-import { CUSTOM_RULE_TYPES, getCustomRuleDefinition, hasCommaPayload, isCustomRuleType, supportsNoResolve } from "../../../packages/core/src/rules/custom-rule-types";
+import { CUSTOM_RULE_TYPES, getCustomRuleDefinition, getSourceIpRuleType, hasCommaPayload, isCustomRuleType, supportsNoResolve } from "../../../packages/core/src/rules/custom-rule-types";
 import { normalizeCustomRuleValue, normalizeLogicRulePayload } from "../../../packages/core/src/rules/custom-rule-value";
 import { parseCustomRuleBatchImport } from "../../../packages/core/src/rules/custom-rule-batch-import";
 import { buildGenerateOptionsFromConfig } from "../../../packages/core/src/subscription/config-utils";
@@ -71,11 +71,80 @@ describe("Mihomo stable custom rule round trips", () => {
     expect(isCustomRuleType("MATCH")).toBe(false);
     expect(isCustomRuleType("SUB-RULE")).toBe(false);
     expect(isCustomRuleType("toString")).toBe(false);
+    expect(getSourceIpRuleType("unknown")).toBeUndefined();
   });
 
   it("canonicalizes imported type names and compares legacy flags by their effect", () => {
     expect(parse("domain,local.subboost.test,DIRECT").rules[0]?.type).toBe("DOMAIN");
     const result = parseCustomRuleBatchImport({ text: "DOMAIN,local.subboost.test,DIRECT", defaultType: "DOMAIN", defaultTarget: "DIRECT", defaultNoResolve: false, targetOptions: ["DIRECT"], existingRules: [{ id: "old", type: "DOMAIN", value: "local.subboost.test", target: "DIRECT", noResolve: true }] });
     expect(result.duplicateCount).toBe(1);
+  });
+
+  it.each([
+    ["AND,((NETWORK,tcp))", "AND", "((NETWORK,tcp))"],
+    ["OR,((AND,((NETWORK,tcp))),(DOMAIN,local.subboost.test)),", "OR", "((AND,((NETWORK,tcp))),(DOMAIN,local.subboost.test))"],
+    ["NOT,((NETWORK,udp))", "NOT", "((NETWORK,udp))"],
+    ["DOMAIN-REGEX,^local{1,3}", "DOMAIN-REGEX", "^local{1,3}"],
+    ["DOMAIN-REGEX,^local{1,3},", "DOMAIN-REGEX", "^local{1,3}"],
+    ["PROCESS-NAME-REGEX,^(curl,wget){1,3}$", "PROCESS-NAME-REGEX", "^(curl,wget){1,3}$"],
+    ["DOMAIN-REGEX,^[a,b]{1,}$", "DOMAIN-REGEX", "^[a,b]{1,}$"],
+    ["DOMAIN-REGEX,^[]a,b]{1,3}$", "DOMAIN-REGEX", "^[]a,b]{1,3}$"],
+    ["DOMAIN-REGEX,^[^]a,b]{1,3}$", "DOMAIN-REGEX", "^[^]a,b]{1,3}$"],
+    [String.raw`DOMAIN-REGEX,^local\,subboost$`, "DOMAIN-REGEX", String.raw`^local\,subboost$`],
+    [String.raw`DOMAIN-REGEX,^local[\],]{3}$`, "DOMAIN-REGEX", String.raw`^local[\],]{3}$`],
+    ['"DOMAIN-REGEX","^local,subboost$"', "DOMAIN-REGEX", "^local,subboost$"],
+    ['"DOMAIN-REGEX","^local,subboost$",', "DOMAIN-REGEX", "^local,subboost$"],
+    ['DOMAIN-REGEX,^"local"{1,3}', "DOMAIN-REGEX", '^"local"{1,3}'],
+  ])("inherits the target without splitting payload commas: %s", (text, type, value) => {
+    const result = parse(text);
+    expect(result.canImport).toBe(true);
+    expect(result.rules[0]).toMatchObject({ type, value, target: "DIRECT" });
+  });
+
+  it.each([
+    "AND,((NETWORK,tcp)),Missing",
+    "DOMAIN-REGEX,^local{1,3},Missing",
+    "DOMAIN-REGEX,^local,Missing",
+    '"DOMAIN-REGEX","^local,subboost$",Missing',
+  ])("does not absorb an unknown explicit target into the payload: %s", (text) => {
+    const result = parse(text);
+    expect(result.canImport).toBe(false);
+    expect(result.items[0]?.message).toBe("未知目标：Missing");
+  });
+
+  it.each([
+    ["IP-CIDR", "203.0.113.0/24", "SRC-IP-CIDR"],
+    ["IP-CIDR6", "203.0.113.0/24", "SRC-IP-CIDR"],
+    ["IP-SUFFIX", "203.0.113.1/24", "SRC-IP-SUFFIX"],
+    ["IP-ASN", "64512", "SRC-IP-ASN"],
+    ["GEOIP", "cn", "SRC-GEOIP"],
+  ])("normalizes %s src parameters through saved config and YAML", (type, value, sourceType) => {
+    for (const params of ["src", "no-resolve,src", "src,no-resolve"]) {
+      const imported = parse(`${type},${value},DIRECT,${params}`);
+      expect(imported.canImport).toBe(true);
+      expect(imported.rules[0]).toMatchObject({ type: sourceType, value, target: "DIRECT", noResolve: false });
+      const template = validateSubBoostTemplateConfig(validConfig({ customRules: imported.rules }));
+      expect(template.ok).toBe(true);
+      if (!template.ok) throw new Error(template.error);
+      const options = buildGenerateOptionsFromConfig(JSON.parse(JSON.stringify({
+        template: "full", enabledGroups: [], enabledRules: [], customRules: template.config.customRules,
+      })), { nodes: [] });
+      expect((load(configToYaml(generateClashConfig(options))) as { rules: string[] }).rules)
+        .toContain(`${sourceType},${value},DIRECT`);
+    }
+  });
+
+  it("inherits an empty target with src and compares the canonical source matcher for duplicates", () => {
+    expect(parse("IP-CIDR,203.0.113.0/24,,src").rules[0]).toMatchObject({ type: "SRC-IP-CIDR", target: "DIRECT" });
+    const duplicate = parseCustomRuleBatchImport({ text: "IP-CIDR6,203.0.113.0/24,DIRECT,no-resolve,src", defaultType: "DOMAIN", defaultTarget: "DIRECT", defaultNoResolve: false, targetOptions: ["DIRECT"], existingRules: [{ id: "old", type: "SRC-IP-CIDR", value: "203.0.113.0/24", target: "DIRECT" }] });
+    expect(duplicate.duplicateCount).toBe(1);
+    expect(parse("DOMAIN,local.subboost.test,DIRECT,src").errorCount).toBe(1);
+    expect(parse("RULE-SET,https://local.subboost.test/list.mrs,DIRECT,no-resolve,src").errorCount).toBe(1);
+  });
+
+  it("handles long malformed regex delimiter input in bounded time", () => {
+    const started = performance.now();
+    expect(parse(`DOMAIN-REGEX,^local${"{".repeat(100_000)},Missing`).items[0]?.message).toBe("未知目标：Missing");
+    expect(performance.now() - started).toBeLessThan(2000);
   });
 });

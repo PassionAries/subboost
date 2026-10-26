@@ -189,7 +189,8 @@ export function ProxyGroupsCustomRulesBatchDialog({
             />
             <div className="text-[10px] leading-4 text-fg-40">
               每行一条；缺少目标时使用当前目标，纯值行使用当前类型、目标和 no-resolve 设置。
-              正则与逻辑规则的目标放在最后一列；no-resolve 仅对目标 IP 规则及规则集生效。
+              正则与逻辑规则有目标时放在最后一列；no-resolve 仅对目标 IP 规则及规则集生效。
+              {'正则含歧义的字面逗号时，类型和值分别用双引号包裹，如："DOMAIN-REGEX","^local,subboost$"；只写这两列会使用当前目标。'}
             </div>
           </div>
 

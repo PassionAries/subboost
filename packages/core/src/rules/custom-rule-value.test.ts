@@ -17,8 +17,8 @@ describe("logic rule payload", () => {
   });
 
   it("keeps sub-rule params and nested logic rules", () => {
-    expect(normalizeLogicRulePayload("OR", "((IP-CIDR,1.1.1.1/32,no-resolve),(AND,((DOMAIN,a.com),(NETWORK,TCP))))"))
-      .toEqual({ ok: true, value: "((IP-CIDR,1.1.1.1/32,no-resolve),(AND,((DOMAIN,a.com),(NETWORK,TCP))))" });
+    expect(normalizeLogicRulePayload("OR", "((IP-CIDR,203.0.113.0/24,no-resolve),(AND,((DOMAIN,a.com),(NETWORK,TCP))))"))
+      .toEqual({ ok: true, value: "((IP-CIDR,203.0.113.0/24,no-resolve),(AND,((DOMAIN,a.com),(NETWORK,TCP))))" });
     expect(normalizeLogicRulePayload("NOT", "((DOMAIN,example.com))")).toEqual({ ok: true, value: "((DOMAIN,example.com))" });
   });
 

@@ -1,7 +1,7 @@
 import type { CustomRule, CustomRuleSet } from "@subboost/core/types/config";
 import { isCustomRuleType } from "./custom-rule-utils";
-import { normalizeCustomRuleValue } from "./custom-rule-value";
-import { hasCommaPayload, supportsNoResolve } from "./custom-rule-types";
+import { isLogicRuleType, normalizeCustomRuleValue } from "./custom-rule-value";
+import { getSourceIpRuleType, hasCommaPayload, supportsNoResolve } from "./custom-rule-types";
 import { allocateRuleSetId, parseManualRuleSetUrl } from "./rule-model";
 
 type ImportRule = Omit<CustomRule, "type"> & { type: CustomRule["type"] | "RULE-SET" };
@@ -79,6 +79,45 @@ function splitRuleLine(rawLine: string): SplitLineResult {
   return { ok: true, parts };
 }
 
+/** Unquoted regex lines use the last comma outside groups/classes/quantifiers
+ * as the policy separator. Literal ambiguous commas use explicit CSV fields. */
+function splitCommaPayloadLine(rawLine: string, type: string): SplitLineResult {
+  const firstComma = rawLine.indexOf(",");
+  const payload = rawLine.slice(firstComma + 1).trim();
+  const logic = isLogicRuleType(type);
+  let depth = 0;
+  let classStart = -1;
+  let separator = -1;
+  for (let index = 0; index < payload.length; index += 1) {
+    const char = payload[index];
+    if (!logic) {
+      if (char === "\\") { index += 1; continue; }
+      if (classStart >= 0) {
+        if (char === "]" && index > classStart + 1 && !(index === classStart + 2 && payload[classStart + 1] === "^")) classStart = -1;
+        continue;
+      }
+      if (char === "[") { classStart = index; continue; }
+      if (char === "{") {
+        let end = index + 1;
+        while (end < payload.length && payload[end] >= "0" && payload[end] <= "9") end += 1;
+        if (end > index + 1) {
+          if (payload[end] === ",") {
+            end += 1;
+            while (end < payload.length && payload[end] >= "0" && payload[end] <= "9") end += 1;
+          }
+          if (payload[end] === "}") { index = end; continue; }
+        }
+      }
+    }
+    if (char === "(") depth += 1;
+    if (char === ")") depth = Math.max(0, depth - 1);
+    if (char === "," && depth === 0) separator = index;
+  }
+  return { ok: true, parts: separator < 0
+    ? [type, payload]
+    : [type, payload.slice(0, separator).trim(), payload.slice(separator + 1).trim()] };
+}
+
 function isCommentLine(value: string): boolean {
   return value.startsWith("#") || value.startsWith("//");
 }
@@ -96,10 +135,6 @@ function normalizeImportLine(value: string): { skip?: string; line?: string } {
   }
 
   return { line: value };
-}
-
-function normalizeNoResolve(value: string): boolean | null {
-  return value.trim().toLowerCase() === "no-resolve" ? true : null;
 }
 
 function getTargetKey(target: CustomRule["target"]): string {
@@ -151,7 +186,9 @@ function buildRuleFromParts(
     };
   }
 
-  if (parts.length > 4) {
+  const sourceType = getSourceIpRuleType(type);
+  const params = parts.slice(3).map((param) => param.toLowerCase());
+  if (parts.length > 4 && (!sourceType || !params.includes("src") || params.some((param) => param !== "no-resolve" && param !== "src"))) {
     return "规则列数过多";
   }
 
@@ -159,20 +196,21 @@ function buildRuleFromParts(
   const target = parts[2]?.trim() || options.defaultTarget.trim();
   const noResolve =
     parts.length >= 4
-      ? normalizeNoResolve(parts[3] ?? "")
+      ? params.includes("no-resolve")
       : parts[2]?.trim()
         ? false
         : Boolean(options.defaultNoResolve);
 
-  if (noResolve === null) {
-    return `不支持的尾列：${parts[3]}`;
+  const invalidParam = params.find((param) => param !== "no-resolve" && !(param === "src" && sourceType));
+  if (invalidParam !== undefined) {
+    return `不支持的尾列：${invalidParam}`;
   }
 
   return {
-    type,
+    type: params.includes("src") && sourceType ? sourceType : type,
     value,
     target,
-    noResolve,
+    noResolve: params.includes("src") ? false : noResolve,
   };
 }
 
@@ -254,7 +292,7 @@ export function parseCustomRuleBatchImport(
     const split = plainCommaPayload
       ? { ok: true as const, parts: [line] }
       : hasCommaPayload(prefix) && !rawPrefix.startsWith('"')
-        ? { ok: true as const, parts: line.split(",").map((part) => part.trim()) }
+        ? splitCommaPayloadLine(line, prefix)
         : splitRuleLine(line);
     if (!split.ok) {
       errorCount += 1;
